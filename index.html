@@ -178,6 +178,8 @@
   .picks-manager-avatar { width:38px; height:38px; border-radius:50%; background:rgba(255,255,255,0.2); display:flex; align-items:center; justify-content:center; font-family:'Playfair Display',serif; font-size:17px; font-weight:700; flex-shrink:0; }
   .picks-manager-name { font-family:'Playfair Display',serif; font-size:18px; font-weight:700; }
   .picks-manager-sub { font-size:10px; opacity:0.65; letter-spacing:0.15em; margin-top:1px; }
+  .jacket-badges { display:flex; align-items:center; gap:3px; margin-top:5px; flex-wrap:wrap; }
+  .jacket-icon { font-size:15px; line-height:1; filter:drop-shadow(0 1px 2px rgba(0,0,0,0.3)); }
   .picks-list { padding:14px 18px; display:flex; flex-direction:column; gap:0; }
   .picks-golfer-row { display:flex; align-items:center; gap:10px; padding:9px 0; border-bottom:1px solid var(--border); }
   .picks-golfer-row:last-child { border-bottom:none; }
@@ -218,7 +220,7 @@
     </div>
     <div class="header-right">
       <div class="live-pill"><div class="live-dot"></div><span id="liveLabel">LIVE</span></div>
-      <div class="entry-fee">Entry Fee: <strong>$30</strong></div>
+      <div class="entry-fee">Entry Fee: <strong>$35</strong></div>
     </div>
   </div>
 </header>
@@ -269,16 +271,15 @@
       <div class="gj-card">
         <div class="gj-head">🏆 Green Jackets</div>
         <div class="gj-row"><span class="gj-year">2025</span><span class="gj-winner" style="color:var(--gold);font-weight:700">Schutte (2)</span></div>
-        <div class="gj-row"><span class="gj-year">2024</span><span class="gj-winner">Shayne (2)</span></div>
-        <div class="gj-row"><span class="gj-year">2023</span><span class="gj-winner">Frei (2)</span></div>
+        <div class="gj-row"><span class="gj-year">2024</span><span class="gj-winner">Shayne (3)</span></div>
+        <div class="gj-row"><span class="gj-year">2023</span><span class="gj-winner">Frei (3)</span></div>
         <div class="gj-row"><span class="gj-year">2022</span><span class="gj-winner">TK</span></div>
         <div class="gj-row"><span class="gj-year">2021</span><span class="gj-winner">Baker (2)</span></div>
         <div class="gj-row"><span class="gj-year">2020</span><span class="gj-winner">Shayne (2)</span></div>
         <div class="gj-row"><span class="gj-year">2019</span><span class="gj-winner">Frei (2)</span></div>
         <div class="gj-row"><span class="gj-year">2018</span><span class="gj-winner">Shayne</span></div>
-        <div class="gj-row"><span class="gj-year">2017</span><span class="gj-winner">Frei</span></div>
-        <div class="gj-row"><span class="gj-year">2016</span><span class="gj-winner">Frei</span></div>
-        <div class="gj-row"><span class="gj-year">2015</span><span class="gj-winner">Frei</span></div>
+        <div class="gj-row"><span class="gj-year">2015</span><span class="gj-winner">Baker</span></div>
+        <div class="gj-row"><span class="gj-year">2014</span><span class="gj-winner">Frei</span></div>
         <div class="gj-row"><span class="gj-year">2013</span><span class="gj-winner">Schutte</span></div>
       </div>
     </div>
@@ -312,7 +313,7 @@
       <div class="rule-card"><div class="rule-icon">✂️</div><div class="rule-title">Missed Cuts</div><div class="rule-body">Golfers who miss the cut score <strong>−1 point</strong>. All 8 picks accumulate points independently.</div></div>
       <div class="rule-card"><div class="rule-icon">🔗</div><div class="rule-title">Round Leaders</div><div class="rule-body">If your pick leads (or co-leads) after Day 1, 2, or 3, you earn 2, 4, or 6 bonus points respectively.</div></div>
       <div class="rule-card"><div class="rule-icon">📊</div><div class="rule-title">Best Team Score</div><div class="rule-body">The manager whose team has the best combined score-to-par earns a 5-point bonus. Ties split the bonus.</div></div>
-      <div class="rule-card"><div class="rule-icon">💰</div><div class="rule-title">Entry & Prizes</div><div class="rule-body"><strong>$30 entry fee.</strong><br>1st place: 60% of pot<br>2nd place: 30% of pot<br>3rd place: 10% of pot</div></div>
+
     </div>
   </div>
 </div>
@@ -342,13 +343,13 @@
 // LEAGUE DATA — update picks each year
 // ══════════════════════════════════════════
 const LEAGUE = [
-  { manager:"Shayne",  picks:[] },
-  { manager:"Latman",  picks:[] },
-  { manager:"Joey",    picks:[] },
-  { manager:"Schutte", picks:[] },
-  { manager:"TK",      picks:[] },
-  { manager:"Mager",   picks:[] },
-  { manager:"Frei",    picks:[] },
+  { manager:"Shayne",  picks:[], jackets:3 },
+  { manager:"Latman",  picks:[], jackets:0 },
+  { manager:"Joey",    picks:[], jackets:0 },
+  { manager:"Schutte", picks:[], jackets:2 },
+  { manager:"TK",      picks:[], jackets:1 },
+  { manager:"Mager",   picks:[], jackets:0 },
+  { manager:"Frei",    picks:[], jackets:3 },
 ];
 
 const PTS = { champion:15, top5:10, top10:5, madeCut:1, missedCut:-1, day1:2, day2:4, day3:6, bestTeam:5 };
@@ -582,6 +583,10 @@ function renderPicks() {
         : `<div class="picks-golfer-row"><div class="picks-slot" style="background:#f0f0f0;color:#bbb">${i+1}</div><div class="picks-golfer-empty">TBD</div></div>`;
     }).join('');
 
+    const jacketsHtml = e.jackets > 0
+      ? `<div class="jacket-badges">${Array.from({length:e.jackets}).map(()=>'<span class="jacket-icon">🧥</span>').join('')}<span style="font-size:10px;opacity:0.8;margin-left:4px">${e.jackets} Green Jacket${e.jackets>1?'s':''}</span></div>`
+      : '';
+
     const footer = !hasPicks
       ? `<div class="picks-tbd-banner"><p>⏳ Awaiting draft — <strong>picks not yet selected</strong></p></div>`
       : '';
@@ -589,7 +594,11 @@ function renderPicks() {
     return `<div class="picks-manager-card">
       <div class="picks-manager-head">
         <div class="picks-manager-avatar">${initials}</div>
-        <div><div class="picks-manager-name">${e.manager}</div><div class="picks-manager-sub">8 PICKS</div></div>
+        <div>
+          <div class="picks-manager-name">${e.manager}</div>
+          <div class="picks-manager-sub">8 PICKS</div>
+          ${jacketsHtml}
+        </div>
       </div>
       <div class="picks-list">${rows}</div>
       ${footer}
