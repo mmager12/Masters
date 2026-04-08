@@ -313,7 +313,7 @@
       <div class="rule-card"><div class="rule-icon">🏅</div><div class="rule-title">Point Scoring</div><div class="rule-body"><strong>Champion:</strong> 15 pts &nbsp;|&nbsp; <strong>Top 5:</strong> 10 pts<br><strong>Top 10:</strong> 5 pts &nbsp;|&nbsp; <strong>Made Cut:</strong> 1 pt<br><strong>Missed Cut:</strong> −1 pt<br><strong>Day 1 Leader:</strong> 2 pts<br><strong>Day 2 Leader:</strong> 4 pts<br><strong>Day 3 Leader:</strong> 6 pts<br><strong>Best Team Score:</strong> 5 pts bonus</div></div>
       <div class="rule-card"><div class="rule-icon">✂️</div><div class="rule-title">Missed Cuts</div><div class="rule-body">Golfers who miss the cut score <strong>−1 point</strong>. All 8 picks accumulate points independently.</div></div>
       <div class="rule-card"><div class="rule-icon">🔗</div><div class="rule-title">Round Leaders</div><div class="rule-body">If your pick leads (or co-leads) after Day 1, 2, or 3, you earn 2, 4, or 6 bonus points respectively.</div></div>
-      <div class="rule-card"><div class="rule-icon">📊</div><div class="rule-title">Best Team Score</div><div class="rule-body">The manager whose team has the best combined score-to-par earns a 5-point bonus. If multiple managers tie for best team score, <strong>each</strong> receives the full 5 points.</div></div>
+      <div class="rule-card"><div class="rule-icon">📊</div><div class="rule-title">Best Team Score</div><div class="rule-body">After Round 2 is complete, the manager whose team has the best combined score-to-par earns a 5-point bonus. If multiple managers tie, <strong>each</strong> receives the full 5 points.</div></div>
 
     </div>
   </div>
@@ -448,14 +448,26 @@ function computeAndRender() {
     const {total, breakdown, teamTotal} = computePoints(e);
     return {...e, total, breakdown, teamTotal};
   });
-  // Best team score bonus
-  const scores = entries.map(e=>e.teamTotal);
-  const best = Math.min(...scores);
-  const anyScored = entries.some(e=>e.teamTotal !== 0);
-  if (anyScored) {
-    // Every manager who ties for best team score gets the full 5 pts (no splitting)
-    entries.filter(e=>e.teamTotal===best).forEach(e=>{ e.total += PTS.bestTeam; e.hasBestTeam=true; });
+
+  // Best team score bonus — only awarded after Round 2 is complete.
+  // Round 2 is complete when: at least one player has been cut AND
+  // all non-cut players have a total reflecting 2+ rounds (posNum set and thru=18 for current round).
+  const allPlayers = Object.values(golferData);
+  const cutExists = allPlayers.some(p => p.cut);
+  const activePlayers = allPlayers.filter(p => !p.cut);
+  // round2Complete: cut has happened and all active players have finished their current round
+  const round2Complete = cutExists && activePlayers.length > 0 && activePlayers.every(p => p.thru === 18);
+
+  if (round2Complete) {
+    const scores = entries.map(e=>e.teamTotal);
+    const best = Math.min(...scores);
+    const anyScored = entries.some(e=>e.teamTotal !== 0);
+    if (anyScored) {
+      // Every manager who ties for best team score gets the full 5 pts (no splitting)
+      entries.filter(e=>e.teamTotal===best).forEach(e=>{ e.total += PTS.bestTeam; e.hasBestTeam=true; });
+    }
   }
+
   entries.sort((a,b)=>b.total-a.total);
   sortedEntries = entries;
   renderStandings(entries);
