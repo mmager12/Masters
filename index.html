@@ -289,10 +289,10 @@
   <!-- PICKS -->
   <div id="tab-picks" style="display:none">
     <div class="draft-notice">
-      <div class="draft-notice-icon">📋</div>
+      <div class="draft-notice-icon">✅</div>
       <div class="draft-notice-text">
-        <h3>Draft Pending</h3>
-        <p>The 2026 draft has not yet taken place. Picks will be filled in after the draft is complete. Each manager selects <strong>8 golfers</strong>.</p>
+        <h3>Draft Complete</h3>
+        <p>All 7 managers have submitted their picks for the <strong>2026 Masters Fantasy League</strong>. Let the tournament begin!</p>
       </div>
     </div>
     <div class="picks-grid" id="picksGrid"></div>
@@ -344,13 +344,13 @@
 // LEAGUE DATA — update picks each year
 // ══════════════════════════════════════════
 const LEAGUE = [
-  { manager:"Shayne",  picks:[], jackets:3 },
-  { manager:"Latman",  picks:[], jackets:0 },
-  { manager:"Baker",   picks:[], jackets:2 },
-  { manager:"Schutte", picks:[], jackets:2 },
-  { manager:"TK",      picks:[], jackets:1 },
-  { manager:"Mager",   picks:[], jackets:0 },
-  { manager:"Frei",    picks:[], jackets:3 },
+  { manager:"Shayne",  picks:["Scottie Scheffler","Hideki Matsuyama","Justin Rose","Corey Conners","Jason Day","Daniel Berger","Keegan Bradley","Brian Harman"], jackets:3 },
+  { manager:"Latman",  picks:["Cam Young","Akshay Bhatia","Robert MacIntyre","Russell Henley","Jacob Bridgeman","Ben Griffin","Rasmus Hojgaard","Rasmus Neergaard"], jackets:0 },
+  { manager:"Baker",   picks:["Ludvig Åberg","Matt Fitzpatrick","Min Woo Lee","Si Woo Kim","Jake Knapp","Nicolai Højgaard","Kurt Kitayama","Sam Stevens"], jackets:2 },
+  { manager:"Schutte", picks:["Rory McIlroy","Viktor Hovland","Brooks Koepka","Shane Lowry","Cameron Smith","Wyndham Clark","Max Homa","Haotong Li"], jackets:2 },
+  { manager:"TK",      picks:["Jon Rahm","Collin Morikawa","Jordan Spieth","Sam Burns","JJ Spaun","Gary Woodland","Maverick McNealy","Alex Noren"], jackets:1 },
+  { manager:"Mager",   picks:["Xander Schauffele","Tommy Fleetwood","Patrick Cantlay","Adam Scott","Justin Thomas","Aaron Rai","Harris English","Harry Hall"], jackets:0 },
+  { manager:"Frei",    picks:["Bryson DeChambeau","Patrick Reed","Chris Gotterup","Tyrrell Hatton","Sepp Straka","Sungjae Im","Marco Penge","Tom McKibbin"], jackets:3 },
 ];
 
 const PTS = { champion:15, top5:10, top10:5, madeCut:1, missedCut:-1, day1:2, day2:4, day3:6, bestTeam:5 };
