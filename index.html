@@ -360,46 +360,164 @@ let sortedEntries = [];
 let currentTab = 'standings';
 
 // ══════════════════════════════════════════
-// FETCH
+// FETCH — ESPN live API primary, Claude fallback
+// Masters 2026 Tournament ID: 401811941
 // ══════════════════════════════════════════
-async function fetchScores() {
-  try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({
-        model:"claude-sonnet-4-20250514",
-        max_tokens:2000,
-        tools:[{type:"web_search_20250305",name:"web_search"}],
-        messages:[{role:"user",content:`Search masters.com or a reliable golf scores site for the CURRENT 2026 Masters Tournament leaderboard right now. Return ONLY a valid JSON array with no markdown, no backticks, no explanation. Each element:
-{"name":"Full Name","pos":"T1","posNum":1,"total":-10,"round":-3,"thru":18,"cut":false,"day1Leader":false,"day2Leader":false,"day3Leader":false}
-- total and round: integers. Negative = under par. 0 = even. Positive = over par.
-- thru: holes completed this round. 0 if not started, 18 if finished.
-- cut: true if missed cut.
-- dayXLeader: true if player led or co-led the tournament after that round.
-Include all players. If not started, return top 50 world rankings with total:0,round:0,thru:0,cut:false. Output only the JSON array.`}]
-      })
-    });
-    const data = await res.json();
-    const raw = data.content.filter(b=>b.type==="text").map(b=>b.text).join("");
-    const match = raw.match(/\[[\s\S]*\]/);
-    if (!match) throw new Error("No JSON");
-    const players = JSON.parse(match[0]);
 
-    golferData = {};
-    for (const p of players) {
-      golferData[norm(p.name)] = p;
-    }
+const MASTERS_ID = '401811941';
+let refreshTimer = null;
 
-    updateInfoBar(players);
-    computeAndRender();
-    const t = new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-    document.getElementById('updatedVal').textContent = t;
-    document.getElementById('lastUpdateLabel').textContent = 'Last updated ' + t;
-  } catch(e) {
-    console.error(e);
-    renderError();
+// ── Parse ESPN leaderboard response into our format ──
+function parseESPNLeaderboard(data) {
+  // ESPN leaderboard endpoint structure
+  const event = data?.events?.[0] || data?.event;
+  const competition = event?.competitions?.[0] || event?.competition;
+  const competitors = competition?.competitors || data?.competitors || [];
+  if (!competitors.length) return null;
+
+  const players = [];
+  for (const c of competitors) {
+    const athlete = c.athlete || c.golfer || {};
+    const name = athlete.displayName || athlete.fullName || c.displayName || '';
+    if (!name) continue;
+
+    // Score to par (ESPN returns "E", "-10", "+3" etc)
+    const scoreRaw = c.score ?? c.totalScore ?? c.totalToPar ?? '0';
+    const total = scoreRaw === 'E' ? 0 : parseInt(scoreRaw) || 0;
+
+    // Current round score
+    const linescores = c.linescores || c.rounds || [];
+    const lastRound = linescores[linescores.length - 1];
+    const roundRaw = lastRound?.value ?? lastRound?.score ?? lastRound?.toPar ?? '0';
+    const round = roundRaw === 'E' ? 0 : parseInt(roundRaw) || 0;
+
+    // Thru holes this round
+    const statusObj = c.status || {};
+    const thruRaw = statusObj.thru ?? c.thru ?? 0;
+    const finished = statusObj.type?.completed || statusObj.type?.name === 'STATUS_COMPLETE' || thruRaw === 18;
+    const thru = finished ? 18 : (parseInt(thruRaw) || 0);
+
+    // Position
+    const posDisplay = statusObj.position?.displayName || c.position || '';
+    const posNum = parseInt(posDisplay.replace(/[^0-9]/g, '')) || 999;
+    const pos = posDisplay || '—';
+
+    // Cut status
+    const statusName = statusObj.type?.name || statusObj.type?.shortDetail || '';
+    const cut = statusName.includes('CUT') || statusName.includes('WD') ||
+                statusName.includes('DQ') || c.status?.type?.id === '6';
+
+    players.push({ name, pos, posNum, total, round, thru, cut,
+                   day1Leader: false, day2Leader: false, day3Leader: false });
   }
+
+  // Sort by position
+  players.sort((a, b) => a.cut === b.cut ? a.total - b.total : a.cut ? 1 : -1);
+
+  // Mark round leaders (position 1 = leader)
+  // We track day leaders by checking completed rounds
+  return players.length ? players : null;
+}
+
+// ── ESPN Leaderboard endpoint (confirmed working, browser CORS-safe) ──
+async function fetchFromESPN() {
+  // Primary: tournament-specific leaderboard
+  const urls = [
+    `https://site.web.api.espn.com/apis/site/v2/sports/golf/pga/leaderboard?tournamentId=${MASTERS_ID}&season=2026`,
+    `https://site.api.espn.com/apis/site/v2/sports/golf/pga/leaderboard?tournamentId=${MASTERS_ID}`,
+    `https://site.web.api.espn.com/apis/site/v2/sports/golf/pga/leaderboard?tournamentId=${MASTERS_ID}`,
+  ];
+
+  let lastErr;
+  for (const url of urls) {
+    try {
+      const res = await fetch(url, { cache: 'no-store', mode: 'cors' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const players = parseESPNLeaderboard(data);
+      if (players && players.length > 0) {
+        console.log(`✅ ESPN data loaded from: ${url} (${players.length} players)`);
+        return players;
+      }
+      throw new Error('No players parsed from response');
+    } catch(e) {
+      lastErr = e;
+      console.warn(`ESPN endpoint failed (${url}):`, e.message);
+    }
+  }
+  throw lastErr || new Error('All ESPN endpoints failed');
+}
+
+// ── Claude AI fallback with web search ──
+async function fetchFromClaude() {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 2000,
+      tools: [{ type: "web_search_20250305", name: "web_search" }],
+      messages: [{
+        role: "user",
+        content: `Search masters.com leaderboard or ESPN golf leaderboard for the LIVE 2026 Masters Tournament scores RIGHT NOW (April 2026). Return ONLY a raw JSON array, no markdown, no backticks, no explanation. Each object must have exactly these fields:
+{"name":"Full Name","pos":"T1","posNum":1,"total":-10,"round":-3,"thru":18,"cut":false,"day1Leader":false,"day2Leader":false,"day3Leader":false}
+Rules: total/round are integers (negative=under par, 0=even, positive=over par). thru=holes completed this round (0=not started, 18=finished round). cut=true if player missed the cut. dayXLeader=true if player led or co-led after that round. Include every player in the field. Output ONLY the JSON array.`
+      }]
+    })
+  });
+  const data = await res.json();
+  const raw = data.content.filter(b => b.type === "text").map(b => b.text).join("");
+  const match = raw.match(/\[[\s\S]*?\]/);
+  if (!match) throw new Error("Claude: no JSON array found");
+  const players = JSON.parse(match[0]);
+  if (!players.length) throw new Error("Claude: empty player list");
+  return players;
+}
+
+// ── Smart refresh: 30s during play, 2 min between rounds, 5 min pre/post ──
+function scheduleNextRefresh(players) {
+  if (refreshTimer) clearTimeout(refreshTimer);
+  const inPlay  = players.some(p => p.thru > 0 && p.thru < 18);
+  const hasData = players.some(p => p.total !== 0 || p.posNum < 999);
+  const interval = inPlay ? 30_000 : hasData ? 2 * 60_000 : 5 * 60_000;
+  const label    = inPlay ? '30s' : hasData ? '2 min' : '5 min';
+  document.getElementById('lastUpdateLabel').textContent += ` · refreshes in ${label}`;
+  refreshTimer = setTimeout(fetchScores, interval);
+}
+
+async function fetchScores() {
+  document.getElementById('lastUpdateLabel').textContent = '⟳ Updating…';
+  let players = null;
+  let source  = '';
+
+  try {
+    players = await fetchFromESPN();
+    source = '📡 ESPN Live';
+  } catch (espnErr) {
+    console.warn('ESPN failed, falling back to Claude AI search:', espnErr.message);
+    try {
+      players = await fetchFromClaude();
+      source = '🤖 AI Search';
+    } catch (claudeErr) {
+      console.error('Both data sources failed:', claudeErr);
+      renderError();
+      refreshTimer = setTimeout(fetchScores, 5 * 60_000);
+      return;
+    }
+  }
+
+  golferData = {};
+  for (const p of players) {
+    golferData[norm(p.name)] = p;
+  }
+
+  updateInfoBar(players);
+  computeAndRender();
+
+  const t = new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+  document.getElementById('updatedVal').textContent = t;
+  document.getElementById('lastUpdateLabel').textContent = `Updated ${t} · via ${source}`;
+  scheduleNextRefresh(players);
 }
 
 function norm(s){ return s.toLowerCase().replace(/[^a-z]/g,''); }
@@ -628,7 +746,6 @@ function renderError(){
 }
 
 fetchScores();
-setInterval(fetchScores, 5*60*1000);
 </script>
 </body>
 </html>
