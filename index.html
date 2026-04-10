@@ -246,6 +246,13 @@
   <div id="tab-standings">
     <div class="page-grid">
       <div>
+        <div id="sheetsBanner" style="display:none;background:#fffbf0;border:1px solid var(--gold);border-radius:10px;padding:14px 18px;margin-bottom:18px;font-size:12px;color:var(--text-mid);line-height:1.6;">
+          <strong style="color:var(--green-dark)">⚡ Enable Google Sheets Live Feed for real-time scores:</strong><br>
+          1. Open a new <a href="https://sheets.new" target="_blank" style="color:var(--green)">Google Sheet</a> &nbsp;
+          2. In cell A1 paste: <code style="background:#f0f0f0;padding:2px 6px;border-radius:3px;font-size:11px">=IMPORTHTML("https://www.espn.com/golf/leaderboard/_/tournamentId/401811941","table",1)</code><br>
+          3. Go to <strong>Extensions → Apps Script</strong>, paste the script from the source code comments, deploy as Web App<br>
+          4. Paste your Web App URL into the <code style="background:#f0f0f0;padding:2px 6px;border-radius:3px;font-size:11px">SHEETS_URL</code> variable in the JS
+        </div>
         <div class="point-legend">
           <div class="legend-title">Point System</div>
           <div class="legend-grid">
@@ -359,96 +366,156 @@ let golferData = {};
 let sortedEntries = [];
 let currentTab = 'standings';
 
-// ══════════════════════════════════════════
-// FETCH — ESPN live API primary, Claude fallback
-// Masters 2026 Tournament ID: 401811941
-// ══════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════
+//  DATA PIPELINE
+//  1. Google Sheets (IMPORTHTML → Apps Script JSON) — most live
+//  2. sports.core.api.espn.com — direct ESPN Core API
+//  3. site.web.api.espn.com   — ESPN Site API
+//  4. Claude AI web search    — last resort
+//
+//  SETUP INSTRUCTIONS (one-time, ~5 minutes):
+//  ─────────────────────────────────────────────
+//  A) Open a new Google Sheet
+//  B) In cell A1 paste:
+//     =IMPORTHTML("https://www.espn.com/golf/leaderboard/_/tournamentId/401811941","table",1)
+//  C) Go to Extensions → Apps Script, paste the script below,
+//     then deploy as Web App (Anyone can access, no sign-in):
+//
+//  function doGet() {
+//    const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+//    const data  = sheet.getDataRange().getValues();
+//    const headers = data[0];
+//    const rows = data.slice(1).map(r => {
+//      const obj = {};
+//      headers.forEach((h,i) => obj[String(h).trim()] = String(r[i]).trim());
+//      return obj;
+//    });
+//    return ContentService
+//      .createTextOutput(JSON.stringify({players: rows, updated: new Date().toISOString()}))
+//      .setMimeType(ContentService.MimeType.JSON);
+//  }
+//
+//  D) Copy the deployed Web App URL and paste it as SHEETS_URL below.
+// ══════════════════════════════════════════════════════════════
 
 const MASTERS_ID = '401811941';
+const ESPN_BASE  = 'https://sports.core.api.espn.com/v2/sports/golf/leagues/pga';
+
+// ▼▼▼ PASTE YOUR GOOGLE APPS SCRIPT WEB APP URL HERE ▼▼▼
+const SHEETS_URL = 'https://script.google.com/macros/s/AKfycbwvM5Dl6VeypWK8CCo_pO71ZjqpiF1XrGYPsv_TEhmXBbS6M9sDiBLJENysu85koS94/exec';
+// ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+
 let refreshTimer = null;
 
-// ── Parse ESPN leaderboard response into our format ──
-function parseESPNLeaderboard(data) {
-  // ESPN leaderboard endpoint structure
-  const event = data?.events?.[0] || data?.event;
-  const competition = event?.competitions?.[0] || event?.competition;
-  const competitors = competition?.competitors || data?.competitors || [];
-  if (!competitors.length) return null;
+// ── Parse score string like "E", "-10", "+3" → integer ──
+function parseScore(val) {
+  if (val === null || val === undefined || val === '') return 0;
+  const s = String(val).trim();
+  if (s === 'E' || s === 'Even') return 0;
+  return parseInt(s.replace('+', '')) || 0;
+}
+
+// ── Source 1: Google Sheets IMPORTHTML pipeline ──
+async function fetchFromSheets() {
+  if (!SHEETS_URL) throw new Error('No Sheets URL configured');
+  const res = await fetch(SHEETS_URL, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`Sheets HTTP ${res.status}`);
+  const data = await res.json();
+  const rows = data.players || [];
+  if (!rows.length) throw new Error('Sheets: empty response');
 
   const players = [];
-  for (const c of competitors) {
-    const athlete = c.athlete || c.golfer || {};
-    const name = athlete.displayName || athlete.fullName || c.displayName || '';
-    if (!name) continue;
+  for (const row of rows) {
+    // ESPN table columns: POS, PLAYER, TO PAR, THRU, R1, R2, R3, R4, TOT
+    const name = row['PLAYER'] || row['Name'] || row['Player'] || '';
+    if (!name || name === 'PLAYER') continue;
 
-    // Score to par (ESPN returns "E", "-10", "+3" etc)
-    const scoreRaw = c.score ?? c.totalScore ?? c.totalToPar ?? '0';
-    const total = scoreRaw === 'E' ? 0 : parseInt(scoreRaw) || 0;
+    const posRaw  = row['POS'] || row['Pos'] || row['pos'] || '';
+    const parRaw  = row['TO PAR'] || row['To Par'] || row['TOT'] || '0';
+    const thruRaw = row['THRU'] || row['Thru'] || 'F';
+    const rdRaw   = row['R4'] || row['R3'] || row['R2'] || row['R1'] || '0';
 
-    // Current round score
-    const linescores = c.linescores || c.rounds || [];
-    const lastRound = linescores[linescores.length - 1];
-    const roundRaw = lastRound?.value ?? lastRound?.score ?? lastRound?.toPar ?? '0';
-    const round = roundRaw === 'E' ? 0 : parseInt(roundRaw) || 0;
-
-    // Thru holes this round
-    const statusObj = c.status || {};
-    const thruRaw = statusObj.thru ?? c.thru ?? 0;
-    const finished = statusObj.type?.completed || statusObj.type?.name === 'STATUS_COMPLETE' || thruRaw === 18;
-    const thru = finished ? 18 : (parseInt(thruRaw) || 0);
-
-    // Position
-    const posDisplay = statusObj.position?.displayName || c.position || '';
-    const posNum = parseInt(posDisplay.replace(/[^0-9]/g, '')) || 999;
-    const pos = posDisplay || '—';
-
-    // Cut status
-    const statusName = statusObj.type?.name || statusObj.type?.shortDetail || '';
-    const cut = statusName.includes('CUT') || statusName.includes('WD') ||
-                statusName.includes('DQ') || c.status?.type?.id === '6';
+    const total  = parseScore(parRaw);
+    const round  = parseScore(rdRaw);
+    const thru   = thruRaw === 'F' || thruRaw === '18' ? 18
+                 : thruRaw === '-'  ? 0
+                 : parseInt(thruRaw) || 0;
+    const posStr = String(posRaw).toUpperCase();
+    const cut    = posStr === 'CUT' || posStr === 'WD' || posStr === 'DQ';
+    const posNum = cut ? 999 : parseInt(posStr.replace(/\D/g, '')) || 999;
+    const pos    = cut ? posStr : (posStr || '—');
 
     players.push({ name, pos, posNum, total, round, thru, cut,
                    day1Leader: false, day2Leader: false, day3Leader: false });
   }
 
-  // Sort by position
-  players.sort((a, b) => a.cut === b.cut ? a.total - b.total : a.cut ? 1 : -1);
-
-  // Mark round leaders (position 1 = leader)
-  // We track day leaders by checking completed rounds
-  return players.length ? players : null;
+  if (!players.length) throw new Error('Sheets: no valid players parsed');
+  return players;
 }
 
-// ── ESPN Leaderboard endpoint (confirmed working, browser CORS-safe) ──
-async function fetchFromESPN() {
-  // Primary: tournament-specific leaderboard
-  const urls = [
-    `https://site.web.api.espn.com/apis/site/v2/sports/golf/pga/leaderboard?tournamentId=${MASTERS_ID}&season=2026`,
-    `https://site.api.espn.com/apis/site/v2/sports/golf/pga/leaderboard?tournamentId=${MASTERS_ID}`,
-    `https://site.web.api.espn.com/apis/site/v2/sports/golf/pga/leaderboard?tournamentId=${MASTERS_ID}`,
-  ];
+// ── Source 2: ESPN Core API ──
+function parseCompetitor(c) {
+  const athlete    = c.athlete    || {};
+  const status     = c.status     || {};
+  const linescores = c.linescores || [];
+  const name = athlete.displayName || athlete.fullName || '';
+  if (!name) return null;
 
-  let lastErr;
-  for (const url of urls) {
-    try {
-      const res = await fetch(url, { cache: 'no-store', mode: 'cors' });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      const players = parseESPNLeaderboard(data);
-      if (players && players.length > 0) {
-        console.log(`✅ ESPN data loaded from: ${url} (${players.length} players)`);
-        return players;
-      }
-      throw new Error('No players parsed from response');
-    } catch(e) {
-      lastErr = e;
-      console.warn(`ESPN endpoint failed (${url}):`, e.message);
+  const total  = parseScore(c.totalToPar ?? c.score ?? 0);
+  const last   = linescores[linescores.length - 1] || {};
+  const round  = parseScore(last.toPar ?? last.value ?? 0);
+  const thruRaw = status.thru ?? c.thru ?? 0;
+  const finished = status.type?.completed === true;
+  const thru   = finished ? 18 : (parseInt(thruRaw) || 0);
+  const posStr = (status.position?.displayName || '').toUpperCase();
+  const cut    = (status.type?.name || '').toUpperCase().includes('CUT') ||
+                 posStr === 'CUT' || posStr === 'WD';
+  const posNum = cut ? 999 : parseInt(posStr.replace(/\D/g, '')) || 999;
+  const pos    = cut ? 'CUT' : (status.position?.displayName || '—');
+
+  return { name, pos, posNum, total, round, thru, cut,
+           day1Leader: false, day2Leader: false, day3Leader: false };
+}
+
+async function fetchFromESPNCore() {
+  const url = `${ESPN_BASE}/events/${MASTERS_ID}/competitions/${MASTERS_ID}/competitors?limit=200&lang=en&region=us`;
+  const res = await fetch(url, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`ESPN Core HTTP ${res.status}`);
+  const data = await res.json();
+
+  const items   = data.items || data.competitors || [];
+  if (!items.length) throw new Error('ESPN Core: empty list');
+
+  const players = [];
+  for (const item of items) {
+    let c = item;
+    if (item.$ref && !item.athlete) {
+      try { const r = await fetch(item.$ref, { cache:'no-store' }); if (r.ok) c = await r.json(); }
+      catch { /* skip */ }
     }
+    const p = parseCompetitor(c);
+    if (p) players.push(p);
   }
-  throw lastErr || new Error('All ESPN endpoints failed');
+  if (!players.length) throw new Error('ESPN Core: no players parsed');
+  sortAndRank(players);
+  return players;
 }
 
-// ── Claude AI fallback with web search ──
+// ── Source 3: ESPN Site API ──
+async function fetchFromESPNSite() {
+  const url = `https://site.web.api.espn.com/apis/site/v2/sports/golf/pga/leaderboard?tournamentId=${MASTERS_ID}&season=2026&lang=en`;
+  const res = await fetch(url, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`ESPN Site HTTP ${res.status}`);
+  const data = await res.json();
+  const comps = ((data.events||[])[0]?.competitions||[])[0]?.competitors || [];
+  if (!comps.length) throw new Error('ESPN Site: no competitors');
+  const players = comps.map(parseCompetitor).filter(Boolean);
+  if (!players.length) throw new Error('ESPN Site: no players parsed');
+  sortAndRank(players);
+  return players;
+}
+
+// ── Source 4: Claude AI web search ──
 async function fetchFromClaude() {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -457,32 +524,46 @@ async function fetchFromClaude() {
       model: "claude-sonnet-4-20250514",
       max_tokens: 2000,
       tools: [{ type: "web_search_20250305", name: "web_search" }],
-      messages: [{
-        role: "user",
-        content: `Search masters.com leaderboard or ESPN golf leaderboard for the LIVE 2026 Masters Tournament scores RIGHT NOW (April 2026). Return ONLY a raw JSON array, no markdown, no backticks, no explanation. Each object must have exactly these fields:
-{"name":"Full Name","pos":"T1","posNum":1,"total":-10,"round":-3,"thru":18,"cut":false,"day1Leader":false,"day2Leader":false,"day3Leader":false}
-Rules: total/round are integers (negative=under par, 0=even, positive=over par). thru=holes completed this round (0=not started, 18=finished round). cut=true if player missed the cut. dayXLeader=true if player led or co-led after that round. Include every player in the field. Output ONLY the JSON array.`
+      messages: [{ role: "user", content:
+        `Search masters.com or ESPN for the LIVE 2026 Masters Tournament leaderboard RIGHT NOW. Return ONLY a JSON array, no markdown, no backticks. Each object: {"name":"Full Name","pos":"T1","posNum":1,"total":-10,"round":-3,"thru":18,"cut":false,"day1Leader":false,"day2Leader":false,"day3Leader":false}. total/round: integers (negative=under par). thru: 0=NS,18=finished. cut:true if missed cut. Include ALL players. Output ONLY the JSON array.`
       }]
     })
   });
   const data = await res.json();
-  const raw = data.content.filter(b => b.type === "text").map(b => b.text).join("");
+  const raw  = data.content.filter(b => b.type==="text").map(b=>b.text).join("");
   const match = raw.match(/\[[\s\S]*?\]/);
-  if (!match) throw new Error("Claude: no JSON array found");
+  if (!match) throw new Error("Claude: no JSON");
   const players = JSON.parse(match[0]);
-  if (!players.length) throw new Error("Claude: empty player list");
+  if (!players.length) throw new Error("Claude: empty");
   return players;
 }
 
-// ── Smart refresh: 30s during play, 2 min between rounds, 5 min pre/post ──
+// ── Sort active players by score, push cut to bottom, re-rank ──
+function sortAndRank(players) {
+  players.sort((a,b) => a.cut === b.cut ? a.total - b.total : a.cut ? 1 : -1);
+  let rank = 1;
+  for (let i = 0; i < players.length; i++) {
+    if (players[i].cut) { players[i].posNum=999; players[i].pos='CUT'; continue; }
+    if (i > 0 && !players[i-1].cut && players[i].total === players[i-1].total) {
+      players[i].pos    = 'T' + rank;
+      players[i].posNum = rank;
+    } else {
+      rank = i + 1;
+      players[i].pos    = String(rank);
+      players[i].posNum = rank;
+    }
+  }
+}
+
+// ── Smart refresh intervals ──
 function scheduleNextRefresh(players) {
   if (refreshTimer) clearTimeout(refreshTimer);
   const inPlay  = players.some(p => p.thru > 0 && p.thru < 18);
   const hasData = players.some(p => p.total !== 0 || p.posNum < 999);
-  const interval = inPlay ? 30_000 : hasData ? 2 * 60_000 : 5 * 60_000;
-  const label    = inPlay ? '30s' : hasData ? '2 min' : '5 min';
+  const ms      = inPlay ? 30_000 : hasData ? 120_000 : 300_000;
+  const label   = inPlay ? '30s'  : hasData ? '2 min'  : '5 min';
   document.getElementById('lastUpdateLabel').textContent += ` · refreshes in ${label}`;
-  refreshTimer = setTimeout(fetchScores, interval);
+  refreshTimer = setTimeout(fetchScores, ms);
 }
 
 async function fetchScores() {
@@ -490,20 +571,28 @@ async function fetchScores() {
   let players = null;
   let source  = '';
 
-  try {
-    players = await fetchFromESPN();
-    source = '📡 ESPN Live';
-  } catch (espnErr) {
-    console.warn('ESPN failed, falling back to Claude AI search:', espnErr.message);
+  const sources = [
+    [fetchFromSheets,   '📊 Google Sheets Live'],
+    [fetchFromESPNCore, '📡 ESPN Core API'],
+    [fetchFromESPNSite, '📡 ESPN Site API'],
+    [fetchFromClaude,   '🤖 AI Search'],
+  ];
+
+  for (const [fn, label] of sources) {
     try {
-      players = await fetchFromClaude();
-      source = '🤖 AI Search';
-    } catch (claudeErr) {
-      console.error('Both data sources failed:', claudeErr);
-      renderError();
-      refreshTimer = setTimeout(fetchScores, 5 * 60_000);
-      return;
+      players = await fn();
+      source  = label;
+      console.log(`✅ Data loaded via ${label} (${players.length} players)`);
+      break;
+    } catch(err) {
+      console.warn(`${label} failed:`, err.message);
     }
+  }
+
+  if (!players) {
+    renderError();
+    refreshTimer = setTimeout(fetchScores, 300_000);
+    return;
   }
 
   golferData = {};
@@ -746,6 +835,8 @@ function renderError(){
 }
 
 fetchScores();
+// Show Sheets setup banner if URL not yet configured
+if (!SHEETS_URL) document.getElementById('sheetsBanner').style.display = 'block';
 </script>
 </body>
 </html>
