@@ -426,13 +426,16 @@ async function fetchFromSheets() {
   if (!rows.length) throw new Error('Sheets: empty response');
 
   const players = [];
+  // Debug: log first row's keys so we can confirm column names
+  if (rows[0]) console.log('📊 Sheet columns:', Object.keys(rows[0]).join(', '));
+
   for (const row of rows) {
     // ESPN table columns: POS, PLAYER, TO PAR, THRU, R1, R2, R3, R4, TOT
     const name = row['PLAYER'] || row['Name'] || row['Player'] || '';
     if (!name || name === 'PLAYER') continue;
 
     const posRaw  = row['POS']   || row['Pos']  || row['pos']  || '';
-    const parRaw  = row['TO PAR']|| row['To Par']|| row['TOT'] || '0';
+    const parRaw  = row['TO PAR']|| row['To Par']|| '';   // score to par (col E) — NEVER use TOT
     const thruRaw = row['THRU']  || row['Thru'] || 'F';
     const r1Raw   = row['R1'] || '';
     const r2Raw   = row['R2'] || '';
@@ -444,7 +447,7 @@ async function fetchFromSheets() {
     const posStr  = String(posRaw).trim().toUpperCase();
     const cut     = parStr === 'CUT' || posStr === 'CUT' || posStr === 'WD' || posStr === 'DQ';
 
-    const total   = cut ? 0 : (parseScore(parRaw) ?? 0);
+    const total   = cut ? 0 : (parRaw === '' ? 0 : (parseScore(parRaw) ?? 0));
 
     // Current round score — use latest completed round
     const rdParsed = [r4Raw, r3Raw, r2Raw, r1Raw]
@@ -772,7 +775,8 @@ function renderGolfers() {
       <div class="g-name">${g.name}</div>
       <div class="g-row">
         <span class="g-total ${g.cut?'':totalClass}">${g.cut?'CUT':fmt(g.total)}</span>
-        ${!g.cut?`<span class="g-round" style="font-size:13px;font-weight:600;color:${g.round<0?'var(--green)':g.round>0?'var(--red)':'var(--text-light)'}">Rd: ${fmt(g.round)}</span>`:''}
+        ${!g.cut?`<span style="font-size:10px;color:var(--text-light);margin-left:2px;">TO PAR</span>`:''}
+        ${!g.cut?`<span class="g-round" style="font-size:13px;font-weight:600;margin-left:10px;color:${g.round<0?'var(--green)':g.round>0?'var(--red)':'var(--text-light)'}">Rd: ${fmt(g.round)}</span>`:''}
         <span class="g-thru">${g.cut?'':thruTxt}</span>
       </div>${ptsLine}</div>`;
   }).join('');
