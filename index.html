@@ -407,11 +407,12 @@ const SHEETS_URL = 'https://script.google.com/macros/s/AKfycbxdUiC4lhmwqKkIkMIJC
 
 let refreshTimer = null;
 
-// ── Parse score string like "E", "-10", "+3" → integer ──
+// ── Parse score string like "E", "-10", "+3", "Cut" → integer or null ──
 function parseScore(val) {
   if (val === null || val === undefined || val === '') return 0;
   const s = String(val).trim();
   if (s === 'E' || s === 'Even') return 0;
+  if (s.toUpperCase() === 'CUT' || s === '-') return null; // signals cut/no score
   return parseInt(s.replace('+', '')) || 0;
 }
 
@@ -430,26 +431,60 @@ async function fetchFromSheets() {
     const name = row['PLAYER'] || row['Name'] || row['Player'] || '';
     if (!name || name === 'PLAYER') continue;
 
-    const posRaw  = row['POS'] || row['Pos'] || row['pos'] || '';
-    const parRaw  = row['TO PAR'] || row['To Par'] || row['TOT'] || '0';
-    const thruRaw = row['THRU'] || row['Thru'] || 'F';
-    const rdRaw   = row['R4'] || row['R3'] || row['R2'] || row['R1'] || '0';
+    const posRaw  = row['POS']   || row['Pos']  || row['pos']  || '';
+    const parRaw  = row['TO PAR']|| row['To Par']|| row['TOT'] || '0';
+    const thruRaw = row['THRU']  || row['Thru'] || 'F';
+    const r1Raw   = row['R1'] || '';
+    const r2Raw   = row['R2'] || '';
+    const r3Raw   = row['R3'] || '';
+    const r4Raw   = row['R4'] || '';
 
-    const total  = parseScore(parRaw);
-    const round  = parseScore(rdRaw);
-    const thru   = thruRaw === 'F' || thruRaw === '18' ? 18
-                 : thruRaw === '-'  ? 0
-                 : parseInt(thruRaw) || 0;
-    const posStr = String(posRaw).toUpperCase();
-    const cut    = posStr === 'CUT' || posStr === 'WD' || posStr === 'DQ';
+    // Detect cut from score column showing "Cut"
+    const parStr  = String(parRaw).trim().toUpperCase();
+    const posStr  = String(posRaw).trim().toUpperCase();
+    const cut     = parStr === 'CUT' || posStr === 'CUT' || posStr === 'WD' || posStr === 'DQ';
+
+    const total   = cut ? 0 : (parseScore(parRaw) ?? 0);
+
+    // Current round score — use latest completed round
+    const rdParsed = [r4Raw, r3Raw, r2Raw, r1Raw]
+      .map(v => parseScore(v))
+      .find(v => v !== null && v !== 0);
+    const round = rdParsed ?? 0;
+
+    const thru = cut ? 0
+               : thruRaw === 'F' || thruRaw === '18' ? 18
+               : thruRaw === '-' ? 0
+               : parseInt(thruRaw) || 0;
+
     const posNum = cut ? 999 : parseInt(posStr.replace(/\D/g, '')) || 999;
-    const pos    = cut ? posStr : (posStr || '—');
+    const pos    = cut ? 'CUT' : (posStr || '—');
+
+    // Store round scores for day-leader computation
+    const r1 = parseScore(r1Raw);
+    const r2 = parseScore(r2Raw);
 
     players.push({ name, pos, posNum, total, round, thru, cut,
+                   r1: r1 ?? null, r2: r2 ?? null,
                    day1Leader: false, day2Leader: false, day3Leader: false });
   }
 
   if (!players.length) throw new Error('Sheets: no valid players parsed');
+
+  // Compute Day 1 leader: lowest (best) R1 score among players who have R1
+  const withR1 = players.filter(p => p.r1 !== null && !p.cut);
+  if (withR1.length) {
+    const bestR1 = Math.min(...withR1.map(p => p.r1));
+    players.forEach(p => { if (p.r1 === bestR1) p.day1Leader = true; });
+  }
+
+  // Compute Day 2 leader: lowest R2 score among players who have R2
+  const withR2 = players.filter(p => p.r2 !== null && !p.cut);
+  if (withR2.length) {
+    const bestR2 = Math.min(...withR2.map(p => p.r2));
+    players.forEach(p => { if (p.r2 === bestR2) p.day2Leader = true; });
+  }
+
   return players;
 }
 
@@ -633,7 +668,9 @@ function computePoints(entry) {
     const g = lookupGolfer(name);
     if (!g) { breakdown.push({name, pts:0, reasons:['No data'], g:null}); continue; }
     let pts = 0, reasons = [];
-    if (g.cut) { pts = PTS.missedCut; reasons.push('Missed Cut'); }
+    // Missed cut: g.cut flag OR position is CUT
+    const missedCut = g.cut || String(g.pos).toUpperCase() === 'CUT';
+    if (missedCut) { pts = PTS.missedCut; reasons.push('Missed Cut'); }
     else {
       if (g.posNum === 1) { pts = PTS.champion; reasons.push('Champion 🏆'); }
       else if (g.posNum <= 5) { pts = PTS.top5; reasons.push('Top 5'); }
@@ -718,19 +755,24 @@ function renderGolfers() {
   function isPicked(g){ return pickedSet.has(norm(g.name))||[...pickedSet].some(k=>norm(g.name).includes(k.split('').slice(-4).join(''))); }
   const cards = all.map(g=>{
     const picked=isPicked(g), isChamp=!g.cut&&g.posNum===1;
-    const tc=g.total<0?'under':g.total>0?'over':'';
+    const totalClass=g.total<0?'under':g.total>0?'over':'';
+    const rdClass=g.round<0?'under':g.round>0?'over':'';
     const thruTxt=g.thru===18?'F':g.thru===0?'NS':`Thru ${g.thru}`;
+    const dayBadges = [
+      g.day1Leader ? '<span style="font-size:9px;background:var(--gold);color:#4a3000;padding:2px 6px;border-radius:8px;font-weight:700;margin-left:4px;">Day 1 Leader</span>' : '',
+      g.day2Leader ? '<span style="font-size:9px;background:var(--gold);color:#4a3000;padding:2px 6px;border-radius:8px;font-weight:700;margin-left:4px;">Day 2 Leader</span>' : '',
+    ].join('');
     const ptsLine=g.cut?`<div class="g-pts cut-pts">✂ Missed Cut · −1 pt</div>`
       :isChamp?`<div class="g-pts" style="color:var(--gold)">🏆 Champion · 15 pts</div>`
       :g.posNum<=5?`<div class="g-pts">Top 5 · 10 pts</div>`
       :g.posNum<=10?`<div class="g-pts">Top 10 · 5 pts</div>`
       :`<div class="g-pts">Made Cut · 1 pt</div>`;
     return `<div class="g-card ${isChamp?'champ':picked?'picked':''}">
-      <div class="g-pos">${g.pos||'—'}${picked?' · <span style="color:var(--green);font-weight:700">Picked</span>':''}</div>
+      <div class="g-pos">${g.pos||'—'}${picked?' · <span style="color:var(--green);font-weight:700">Picked</span>':''}${dayBadges}</div>
       <div class="g-name">${g.name}</div>
       <div class="g-row">
-        <span class="g-total ${g.cut?'':tc}">${g.cut?'CUT':fmt(g.total)}</span>
-        ${!g.cut&&g.thru>0?`<span class="g-round">Rd: ${fmt(g.round)}</span>`:''}
+        <span class="g-total ${g.cut?'':totalClass}">${g.cut?'CUT':fmt(g.total)}</span>
+        ${!g.cut?`<span class="g-round" style="font-size:13px;font-weight:600;color:${g.round<0?'var(--green)':g.round>0?'var(--red)':'var(--text-light)'}">Rd: ${fmt(g.round)}</span>`:''}
         <span class="g-thru">${g.cut?'':thruTxt}</span>
       </div>${ptsLine}</div>`;
   }).join('');
