@@ -256,9 +256,9 @@
         <div class="point-legend">
           <div class="legend-title">Point System</div>
           <div class="legend-grid">
-            <div class="legend-item"><div class="legend-pts" style="background:var(--gold);color:#4a3000">15</div><div class="legend-desc">Champion</div></div>
-            <div class="legend-item"><div class="legend-pts">10</div><div class="legend-desc">Top 5</div></div>
-            <div class="legend-item"><div class="legend-pts">5</div><div class="legend-desc">Top 10</div></div>
+            <div class="legend-item"><div class="legend-pts" style="background:var(--gold);color:#4a3000">16</div><div class="legend-desc">Champion + Cut</div></div>
+            <div class="legend-item"><div class="legend-pts">11</div><div class="legend-desc">Top 5 + Cut</div></div>
+            <div class="legend-item"><div class="legend-pts">6</div><div class="legend-desc">Top 10 + Cut</div></div>
             <div class="legend-item"><div class="legend-pts">1</div><div class="legend-desc">Made Cut</div></div>
             <div class="legend-item"><div class="legend-pts" style="background:var(--red);color:white">-1</div><div class="legend-desc">Missed Cut</div></div>
             <div class="legend-item"><div class="legend-pts" style="background:var(--gold);color:#4a3000">2</div><div class="legend-desc">Day 1 Leader</div></div>
@@ -317,7 +317,7 @@
   <div id="tab-rules" style="display:none">
     <div class="rules-grid">
       <div class="rule-card"><div class="rule-icon">🎯</div><div class="rule-title">Draft Format</div><div class="rule-body">Each manager selects <strong>8 golfers</strong> before the tournament. Picks are locked before Thursday's first tee shot.</div></div>
-      <div class="rule-card"><div class="rule-icon">🏅</div><div class="rule-title">Point Scoring</div><div class="rule-body"><strong>Champion:</strong> 15 pts &nbsp;|&nbsp; <strong>Top 5:</strong> 10 pts<br><strong>Top 10:</strong> 5 pts &nbsp;|&nbsp; <strong>Made Cut:</strong> 1 pt<br><strong>Missed Cut:</strong> −1 pt<br><strong>Day 1 Leader:</strong> 2 pts<br><strong>Day 2 Leader:</strong> 4 pts<br><strong>Day 3 Leader:</strong> 6 pts<br><strong>Best Team Score:</strong> 5 pts bonus</div></div>
+      <div class="rule-card"><div class="rule-icon">🏅</div><div class="rule-title">Point Scoring</div><div class="rule-body"><strong>Champion:</strong> 15 + 1 pts &nbsp;|&nbsp; <strong>Top 5:</strong> 10 + 1 pts<br><strong>Top 10:</strong> 5 + 1 pts &nbsp;|&nbsp; <strong>Made Cut:</strong> 1 pt<br><strong>Missed Cut:</strong> −1 pt<br><em style="font-size:11px;color:var(--text-light)">Made Cut point stacks with all finish positions</em><br><strong>Day 1 Leader:</strong> 2 pts<br><strong>Day 2 Leader:</strong> 4 pts<br><strong>Day 3 Leader:</strong> 6 pts<br><strong>Best Team Score:</strong> 5 pts bonus</div></div>
       <div class="rule-card"><div class="rule-icon">✂️</div><div class="rule-title">Missed Cuts</div><div class="rule-body">Golfers who miss the cut score <strong>−1 point</strong>. All 8 picks accumulate points independently.</div></div>
       <div class="rule-card"><div class="rule-icon">🔗</div><div class="rule-title">Round Leaders</div><div class="rule-body">If your pick leads (or co-leads) after Day 1, 2, or 3, you earn 2, 4, or 6 bonus points respectively.</div></div>
       <div class="rule-card"><div class="rule-icon">📊</div><div class="rule-title">Best Team Score</div><div class="rule-body">After Round 2 is complete, the manager whose team has the best combined score-to-par earns a 5-point bonus. If multiple managers tie, <strong>each</strong> receives the full 5 points.</div></div>
@@ -352,7 +352,7 @@
 // ══════════════════════════════════════════
 const LEAGUE = [
   { manager:"Shayne",  picks:["Scottie Scheffler","Hideki Matsuyama","Justin Rose","Corey Conners","Jason Day","Daniel Berger","Keegan Bradley","Brian Harman"], jackets:3 },
-  { manager:"Latman",  picks:["Cam Young","Akshay Bhatia","Robert MacIntyre","Russell Henley","Jacob Bridgeman","Ben Griffin","Rasmus Hojgaard","Rasmus Neergaard"], jackets:0 },
+  { manager:"Latman",  picks:["Cam Young","Akshay Bhatia","Robert MacIntyre","Russell Henley","Jacob Bridgeman","Ben Griffin","Rasmus Højgaard","Rasmus Neergaard"], jackets:0 },
   { manager:"Baker",   picks:["Ludvig Åberg","Matt Fitzpatrick","Min Woo Lee","Si Woo Kim","Jake Knapp","Nicolai Højgaard","Kurt Kitayama","Sam Stevens"], jackets:2 },
   { manager:"Schutte", picks:["Rory McIlroy","Viktor Hovland","Brooks Koepka","Shane Lowry","Cameron Smith","Wyndham Clark","Max Homa","Haotong Li"], jackets:2 },
   { manager:"TK",      picks:["Jon Rahm","Collin Morikawa","Jordan Spieth","Sam Burns","JJ Spaun","Gary Woodland","Maverick McNealy","Alex Noren"], jackets:1 },
@@ -663,6 +663,13 @@ async function fetchScores() {
     golferData[norm(p.name)] = p;
   }
 
+  // ── Manual Day 3 leader overrides (co-leaders after R3) ──
+  const DAY3_LEADERS = ['Rory McIlroy', 'Cam Young'];
+  DAY3_LEADERS.forEach(name => {
+    const g = lookupGolfer(name);
+    if (g) g.day3Leader = true;
+  });
+
   updateInfoBar(players);
   computeAndRender();
 
@@ -700,9 +707,9 @@ function computePoints(entry) {
     const missedCut = g.cut || String(g.pos).toUpperCase() === 'CUT';
     if (missedCut) { pts = PTS.missedCut; reasons.push('Missed Cut'); }
     else {
-      if (g.posNum === 1) { pts = PTS.champion; reasons.push('Champion 🏆'); }
-      else if (g.posNum <= 5) { pts = PTS.top5; reasons.push('Top 5'); }
-      else if (g.posNum <= 10) { pts = PTS.top10; reasons.push('Top 10'); }
+      if (g.posNum === 1) { pts = PTS.champion + PTS.madeCut; reasons.push('Champion 🏆', 'Made Cut'); }
+      else if (g.posNum <= 5) { pts = PTS.top5 + PTS.madeCut; reasons.push('Top 5', 'Made Cut'); }
+      else if (g.posNum <= 10) { pts = PTS.top10 + PTS.madeCut; reasons.push('Top 10', 'Made Cut'); }
       else { pts = PTS.madeCut; reasons.push('Made Cut'); }
       if (g.day1Leader) { pts += PTS.day1; reasons.push('Day 1 Leader'); }
       if (g.day2Leader) { pts += PTS.day2; reasons.push('Day 2 Leader'); }
@@ -721,14 +728,13 @@ function computeAndRender() {
     return {...e, total, breakdown, teamTotal};
   });
 
-  // Best team score bonus — only awarded after Round 2 is complete.
-  // Round 2 is complete when: at least one player has been cut AND
-  // all non-cut players have a total reflecting 2+ rounds (posNum set and thru=18 for current round).
+  // Best team score bonus — awarded once the cut has been made (after R2).
+  // Stays awarded for all subsequent rounds once unlocked.
   const allPlayers = Object.values(golferData);
   const cutExists = allPlayers.some(p => p.cut);
-  const activePlayers = allPlayers.filter(p => !p.cut);
-  // round2Complete: cut has happened and all active players have finished their current round
-  const round2Complete = cutExists && activePlayers.length > 0 && activePlayers.every(p => p.thru === 18);
+  // round2Complete: cut has happened (some players missed cut)
+  // We no longer require thru===18 since in R3/R4 play is still ongoing
+  const round2Complete = cutExists && allPlayers.filter(p => !p.cut).length > 0;
 
   if (round2Complete) {
     const scores = entries.map(e=>e.teamTotal);
