@@ -428,36 +428,37 @@ async function fetchFromSheets() {
   console.log('📊 Sheet raw rows[1]:', JSON.stringify(rawRows[1]));
 
   // ESPN leaderboard table column order (0-indexed):
-  // Col 0: POS  | Col 1: PLAYER | Col 2: TO PAR (score to par, e.g. -12)
-  // Col 3: THRU | Col 4: R1     | Col 5: R2     | Col 6: R3 | Col 7: R4 | Col 8: TOT
-  const IDX = { pos:0, player:1, toPar:2, thru:3, r1:4, r2:5, r3:6, r4:7, tot:8 };
+  // Col 0: POS | Col 1: PLAYER | Col 2: TO PAR | Col 3: THRU | Col 4: TODAY
+  // Col 5: R1  | Col 6: R2     | Col 7: R3     | Col 8: R4   | Col 9: TOT
+  const IDX = { pos:0, player:1, toPar:2, thru:3, today:4, r1:5, r2:6, r3:7, r4:8, tot:9 };
 
   const players = [];
   const startRow = useIndex ? 1 : 0; // skip header row for array format
 
   for (let i = startRow; i < rawRows.length; i++) {
     const row = rawRows[i];
-    let posRaw, name, toParRaw, thruRaw, r1Raw, r2Raw, r3Raw, r4Raw;
+    let posRaw, name, toParRaw, thruRaw, todayRaw, r1Raw, r2Raw, r3Raw, r4Raw;
 
     if (useIndex) {
       // Array format — use positional indexes
-      posRaw  = String(row[IDX.pos]    || '').trim();
-      name    = String(row[IDX.player] || '').trim();
-      toParRaw= String(row[IDX.toPar]  || '').trim();  // ← column E: score to par
-      thruRaw = String(row[IDX.thru]   || '').trim();
-      r1Raw   = String(row[IDX.r1]     || '').trim();
-      r2Raw   = String(row[IDX.r2]     || '').trim();
-      r3Raw   = String(row[IDX.r3]     || '').trim();
-      r4Raw   = String(row[IDX.r4]     || '').trim();
+      posRaw   = String(row[IDX.pos]    || '').trim();
+      name     = String(row[IDX.player] || '').trim();
+      toParRaw = String(row[IDX.toPar]  || '').trim();  // ← column C: score to par
+      thruRaw  = String(row[IDX.thru]   || '').trim();
+      todayRaw = String(row[IDX.today]  || '').trim();  // ← column E: today's round score
+      r1Raw    = String(row[IDX.r1]     || '').trim();
+      r2Raw    = String(row[IDX.r2]     || '').trim();
+      r3Raw    = String(row[IDX.r3]     || '').trim();
+      r4Raw    = String(row[IDX.r4]     || '').trim();
     } else {
       // Old object format — try every possible header variant
       const r = row;
       posRaw   = r['POS']    || r['Pos']    || r['pos']    || '';
       name     = r['PLAYER'] || r['Player'] || r['Name']   || '';
-      // Try every possible column E key variant
       toParRaw = r['TO PAR'] || r['To Par'] || r['TOPAR']  || r['topar'] ||
                  r['TO_PAR'] || r['Score']  || r['SCORE']  || '';
       thruRaw  = r['THRU']   || r['Thru']   || '';
+      todayRaw = r['TODAY']  || r['Today']  || r['today']  || '';
       r1Raw    = r['R1'] || ''; r2Raw = r['R2'] || '';
       r3Raw    = r['R3'] || ''; r4Raw = r['R4'] || '';
     }
@@ -474,11 +475,8 @@ async function fetchFromSheets() {
     // Score to par from column E (TO PAR)
     const total = cut ? 0 : (parseScore(toParRaw) ?? 0);
 
-    // Current round score from latest round column
-    const rdParsed = [r4Raw, r3Raw, r2Raw, r1Raw]
-      .map(v => parseScore(v))
-      .find(v => v !== null && v !== undefined);
-    const round = rdParsed ?? 0;
+    // Current round score — directly from TODAY column (column F)
+    const round = parseScore(todayRaw) ?? 0;
 
     const thru = cut ? 0
                : thruRaw === 'F' || thruRaw === '18' ? 18
