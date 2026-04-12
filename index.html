@@ -373,29 +373,18 @@ let currentTab = 'standings';
 //  3. site.web.api.espn.com   — ESPN Site API
 //  4. Claude AI web search    — last resort
 //
-//  SETUP INSTRUCTIONS (one-time, ~5 minutes):
-//  ─────────────────────────────────────────────
-//  A) Open a new Google Sheet
-//  B) In cell A1 paste:
-//     =IMPORTHTML("https://www.espn.com/golf/leaderboard/_/tournamentId/401811941","table",1)
-//  C) Go to Extensions → Apps Script, paste the script below,
-//     then deploy as Web App (Anyone can access, no sign-in):
+//  GOOGLE APPS SCRIPT (paste in Extensions → Apps Script, deploy as Web App):
 //
 //  function doGet() {
 //    const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
 //    const data  = sheet.getDataRange().getValues();
-//    const headers = data[0];
-//    const rows = data.slice(1).map(r => {
-//      const obj = {};
-//      headers.forEach((h,i) => obj[String(h).trim()] = String(r[i]).trim());
-//      return obj;
-//    });
+//    // Send all rows as arrays (index 0=POS,1=PLAYER,2=TO PAR,3=THRU,4=R1,5=R2,6=R3,7=R4,8=TOT)
+//    const rows = data.map(r => r.map(c => String(c).trim()));
 //    return ContentService
-//      .createTextOutput(JSON.stringify({players: rows, updated: new Date().toISOString()}))
+//      .createTextOutput(JSON.stringify({ rows: rows, updated: new Date().toISOString() }))
 //      .setMimeType(ContentService.MimeType.JSON);
 //  }
 //
-//  D) Copy the deployed Web App URL and paste it as SHEETS_URL below.
 // ══════════════════════════════════════════════════════════════
 
 const MASTERS_ID = '401811941';
@@ -422,48 +411,83 @@ async function fetchFromSheets() {
   const res = await fetch(SHEETS_URL, { cache: 'no-store' });
   if (!res.ok) throw new Error(`Sheets HTTP ${res.status}`);
   const data = await res.json();
-  const rows = data.players || [];
-  if (!rows.length) throw new Error('Sheets: empty response');
+
+  // Support both formats: {rows:[[]]} (new) and {players:[{}]} (old)
+  let rawRows = data.rows || null;
+  let useIndex = true;
+
+  if (!rawRows) {
+    // Old format: header-keyed objects
+    rawRows = data.players || [];
+    useIndex = false;
+  }
+  if (!rawRows.length) throw new Error('Sheets: empty response');
+
+  // Log raw first 3 rows for debugging
+  console.log('📊 Sheet raw rows[0]:', JSON.stringify(rawRows[0]));
+  console.log('📊 Sheet raw rows[1]:', JSON.stringify(rawRows[1]));
+
+  // ESPN leaderboard table column order (0-indexed):
+  // Col 0: POS  | Col 1: PLAYER | Col 2: TO PAR (score to par, e.g. -12)
+  // Col 3: THRU | Col 4: R1     | Col 5: R2     | Col 6: R3 | Col 7: R4 | Col 8: TOT
+  const IDX = { pos:0, player:1, toPar:2, thru:3, r1:4, r2:5, r3:6, r4:7, tot:8 };
 
   const players = [];
-  // Debug: log first row's keys so we can confirm column names
-  if (rows[0]) console.log('📊 Sheet columns:', Object.keys(rows[0]).join(', '));
+  const startRow = useIndex ? 1 : 0; // skip header row for array format
 
-  for (const row of rows) {
-    // ESPN table columns: POS, PLAYER, TO PAR, THRU, R1, R2, R3, R4, TOT
-    const name = row['PLAYER'] || row['Name'] || row['Player'] || '';
-    if (!name || name === 'PLAYER') continue;
+  for (let i = startRow; i < rawRows.length; i++) {
+    const row = rawRows[i];
+    let posRaw, name, toParRaw, thruRaw, r1Raw, r2Raw, r3Raw, r4Raw;
 
-    const posRaw  = row['POS']   || row['Pos']  || row['pos']  || '';
-    const parRaw  = row['TO PAR']|| row['To Par']|| '';   // score to par (col E) — NEVER use TOT
-    const thruRaw = row['THRU']  || row['Thru'] || 'F';
-    const r1Raw   = row['R1'] || '';
-    const r2Raw   = row['R2'] || '';
-    const r3Raw   = row['R3'] || '';
-    const r4Raw   = row['R4'] || '';
+    if (useIndex) {
+      // Array format — use positional indexes
+      posRaw  = String(row[IDX.pos]    || '').trim();
+      name    = String(row[IDX.player] || '').trim();
+      toParRaw= String(row[IDX.toPar]  || '').trim();  // ← column E: score to par
+      thruRaw = String(row[IDX.thru]   || '').trim();
+      r1Raw   = String(row[IDX.r1]     || '').trim();
+      r2Raw   = String(row[IDX.r2]     || '').trim();
+      r3Raw   = String(row[IDX.r3]     || '').trim();
+      r4Raw   = String(row[IDX.r4]     || '').trim();
+    } else {
+      // Old object format — try every possible header variant
+      const r = row;
+      posRaw   = r['POS']    || r['Pos']    || r['pos']    || '';
+      name     = r['PLAYER'] || r['Player'] || r['Name']   || '';
+      // Try every possible column E key variant
+      toParRaw = r['TO PAR'] || r['To Par'] || r['TOPAR']  || r['topar'] ||
+                 r['TO_PAR'] || r['Score']  || r['SCORE']  || '';
+      thruRaw  = r['THRU']   || r['Thru']   || '';
+      r1Raw    = r['R1'] || ''; r2Raw = r['R2'] || '';
+      r3Raw    = r['R3'] || ''; r4Raw = r['R4'] || '';
+    }
 
-    // Detect cut from score column showing "Cut"
-    const parStr  = String(parRaw).trim().toUpperCase();
-    const posStr  = String(posRaw).trim().toUpperCase();
-    const cut     = parStr === 'CUT' || posStr === 'CUT' || posStr === 'WD' || posStr === 'DQ';
+    // Skip header rows, empty rows, and section dividers
+    if (!name || name === 'PLAYER' || name === '' || posRaw === 'POS') continue;
 
-    const total   = cut ? 0 : (parRaw === '' ? 0 : (parseScore(parRaw) ?? 0));
+    // Cut detection: "Cut" in toParRaw OR posRaw
+    const toParUpper = toParRaw.toUpperCase();
+    const posUpper   = posRaw.toUpperCase();
+    const cut = toParUpper === 'CUT' || toParUpper === 'WD' || toParUpper === 'DQ' ||
+                posUpper   === 'CUT' || posUpper   === 'WD' || posUpper   === 'DQ';
 
-    // Current round score — use latest completed round
+    // Score to par from column E (TO PAR)
+    const total = cut ? 0 : (parseScore(toParRaw) ?? 0);
+
+    // Current round score from latest round column
     const rdParsed = [r4Raw, r3Raw, r2Raw, r1Raw]
       .map(v => parseScore(v))
-      .find(v => v !== null && v !== 0);
+      .find(v => v !== null && v !== undefined);
     const round = rdParsed ?? 0;
 
     const thru = cut ? 0
                : thruRaw === 'F' || thruRaw === '18' ? 18
-               : thruRaw === '-' ? 0
+               : thruRaw === '--' || thruRaw === '-'  ? 0
                : parseInt(thruRaw) || 0;
 
-    const posNum = cut ? 999 : parseInt(posStr.replace(/\D/g, '')) || 999;
-    const pos    = cut ? 'CUT' : (posStr || '—');
+    const posNum = cut ? 999 : parseInt(posUpper.replace(/\D/g,'')) || 999;
+    const pos    = cut ? 'CUT' : (posRaw || '—');
 
-    // Store round scores for day-leader computation
     const r1 = parseScore(r1Raw);
     const r2 = parseScore(r2Raw);
 
@@ -474,20 +498,21 @@ async function fetchFromSheets() {
 
   if (!players.length) throw new Error('Sheets: no valid players parsed');
 
-  // Compute Day 1 leader: lowest (best) R1 score among players who have R1
+  // Day 1 leader = lowest (best) R1 among non-cut players
   const withR1 = players.filter(p => p.r1 !== null && !p.cut);
   if (withR1.length) {
     const bestR1 = Math.min(...withR1.map(p => p.r1));
     players.forEach(p => { if (p.r1 === bestR1) p.day1Leader = true; });
   }
 
-  // Compute Day 2 leader: lowest R2 score among players who have R2
+  // Day 2 leader = lowest (best) R2 among non-cut players
   const withR2 = players.filter(p => p.r2 !== null && !p.cut);
   if (withR2.length) {
     const bestR2 = Math.min(...withR2.map(p => p.r2));
     players.forEach(p => { if (p.r2 === bestR2) p.day2Leader = true; });
   }
 
+  console.log(`✅ Sheets: parsed ${players.length} players. Sample: ${players[0]?.name} total=${players[0]?.total} cut=${players[0]?.cut}`);
   return players;
 }
 
